@@ -29,6 +29,7 @@ var (
 type JSONDataStruct struct {
 	Username string `json:"username"`
 	URI      string `json:"uri"`
+	Database string `json:"database"`
 }
 
 // NewDatasource creates a new datasource instance.
@@ -45,9 +46,10 @@ func NewDatasource(_ context.Context, settings backend.DataSourceInstanceSetting
 	// Those are the configured fields from the datasource options
 	uri := jsonData.URI
 	username := jsonData.Username
+	database := jsonData.Database
 	password := settings.DecryptedSecureJSONData["password"]
 
-	datasourceURI := GenerateMongoURI(uri, username, password)
+	datasourceURI := GenerateMongoURI(uri, username, password, database)
 
 	return &Datasource{
 		URI: datasourceURI,
@@ -153,23 +155,38 @@ func (d *Datasource) CheckHealth(ctx context.Context, req *backend.CheckHealthRe
 	}, nil
 }
 
-func GenerateMongoURI(uri string, username string, password string) string {
-	// Check if URI already starts with "mongodb://"
+// GenerateMongoURI generates a MongoDB URI from the provided parameters
+func GenerateMongoURI(uri string, username string, password string, database string) string {
+	// Extract any additional parameters from the URI
+	var params string
+	if idx := strings.Index(uri, "?"); idx != -1 {
+		params = uri[idx:]
+		uri = uri[:idx]
+	}
+
+	// Check if URI already starts with "mongodb://" or "mongodb+srv://"
 	if strings.HasPrefix(uri, "mongodb://") || strings.HasPrefix(uri, "mongodb+srv://") {
-		// If credentials are provided, insert them into the URI
 		if username != "" && password != "" {
 			// Split the URI into two parts: protocol and the rest
 			parts := strings.SplitN(uri, "://", 2)
 			// Rebuild the URI with the credentials
-			return fmt.Sprintf("%s://%s:%s@%s", parts[0], username, password, parts[1])
+			uri = fmt.Sprintf("%s://%s:%s@%s", parts[0], username, password, parts[1])
 		}
-		// If no credentials, return the URI as is
-		return uri
+	} else {
+		if username != "" && password != "" {
+			uri = fmt.Sprintf("mongodb://%s:%s@%s", username, password, uri)
+		} else {
+			uri = fmt.Sprintf("mongodb://%s", uri)
+		}
 	}
 
-	// If the URI does not start with "mongodb://", build it with or without credentials
-	if username != "" && password != "" {
-		return fmt.Sprintf("mongodb://%s:%s@%s", username, password, uri)
+	// Append the database if provided
+	if database != "" {
+		uri = fmt.Sprintf("%s/%s", uri, database)
 	}
-	return fmt.Sprintf("mongodb://%s", uri)
+
+	// Append any additional parameters
+	uri += params
+
+	return uri
 }
