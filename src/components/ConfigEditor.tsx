@@ -24,6 +24,14 @@ export function ConfigEditor(props: Props) {
     onOptionsChange({ ...options, jsonData });
   };
 
+  const onDatabaseChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const jsonData = {
+      ...options.jsonData,
+      database: event.target.value,
+    };
+    onOptionsChange({ ...options, jsonData });
+  };
+
   // Secure field (only sent to the backend)
   const onPasswordChange = (event: ChangeEvent<HTMLInputElement>) => {
     onOptionsChange({
@@ -55,6 +63,9 @@ export function ConfigEditor(props: Props) {
     <div className="gf-form-group">
       <InlineField label="MongoDB URI" labelWidth={16}>
         <Input onChange={onUriChange} value={jsonData.uri || ''} placeholder="mongodb://localhost:27017" width={40} />
+      </InlineField>
+      <InlineField label="Database" labelWidth={16}>
+        <Input onChange={onDatabaseChange} value={jsonData.database || ''} placeholder="db" width={40} />
       </InlineField>
       <InlineField label="Username" labelWidth={16}>
         <Input onChange={onUsernameChange} value={jsonData.username || ''} placeholder="admin" width={40} />
