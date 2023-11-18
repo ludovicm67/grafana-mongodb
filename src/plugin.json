@@ -1,17 +1,19 @@
 {
   "$schema": "https://raw.githubusercontent.com/grafana/grafana/main/docs/sources/developers/plugins/plugin.schema.json",
   "type": "datasource",
-  "name": "Mongodb",
+  "name": "MongoDB",
   "id": "ludovicm67-mongodb-datasource",
   "metrics": true,
   "backend": true,
   "executable": "gpx_mongodb",
   "info": {
-    "description": "Add support for mongo db",
+    "description": "Add support for MongoDB",
     "author": {
-      "name": "Ludovicm67"
+      "name": "ludovicm67"
     },
-    "keywords": ["datasource"],
+    "keywords": [
+      "datasource"
+    ],
     "logos": {
       "small": "img/logo.svg",
       "large": "img/logo.svg"
