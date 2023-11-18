@@ -67,6 +67,7 @@ export function ConfigEditor(props: Props) {
           value={secureJsonData.password || ''}
           placeholder="example"
           width={40}
+          autoComplete="new-password"
         />
       </InlineField>
     </div>
