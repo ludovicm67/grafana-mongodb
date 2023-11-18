@@ -14,7 +14,7 @@ func TestQueryData(t *testing.T) {
 		context.Background(),
 		&backend.QueryDataRequest{
 			Queries: []backend.DataQuery{
-				{RefID: "A"},
+				{RefID: "A", JSON: []byte(`{"queryText": "{}"}`)},
 			},
 		},
 	)

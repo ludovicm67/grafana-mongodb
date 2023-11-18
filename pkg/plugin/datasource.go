@@ -4,13 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
-	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
 	"github.com/grafana/grafana-plugin-sdk-go/backend/instancemgmt"
 	"github.com/grafana/grafana-plugin-sdk-go/data"
 
+	"github.com/grafana/grafana-plugin-sdk-go/backend/log"
+
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	mongoOptions "go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -29,7 +33,6 @@ var (
 type JSONDataStruct struct {
 	Username string `json:"username"`
 	URI      string `json:"uri"`
-	Database string `json:"database"`
 }
 
 // NewDatasource creates a new datasource instance.
@@ -46,10 +49,9 @@ func NewDatasource(_ context.Context, settings backend.DataSourceInstanceSetting
 	// Those are the configured fields from the datasource options
 	uri := jsonData.URI
 	username := jsonData.Username
-	database := jsonData.Database
 	password := settings.DecryptedSecureJSONData["password"]
 
-	datasourceURI := GenerateMongoURI(uri, username, password, database)
+	datasourceURI := generateMongoURI(uri, username, password)
 
 	return &Datasource{
 		URI: datasourceURI,
@@ -89,9 +91,13 @@ func (d *Datasource) QueryData(ctx context.Context, req *backend.QueryDataReques
 	return response, nil
 }
 
-type queryModel struct{}
+type queryModel struct {
+	QueryText  string `json:"queryText"`
+	Database   string `json:"database"`
+	Collection string `json:"collection"`
+}
 
-func (d *Datasource) query(_ context.Context, pCtx backend.PluginContext, query backend.DataQuery) backend.DataResponse {
+func (d *Datasource) query(ctx context.Context, pCtx backend.PluginContext, query backend.DataQuery) backend.DataResponse {
 	var response backend.DataResponse
 
 	// Unmarshal the JSON into our queryModel.
@@ -102,20 +108,82 @@ func (d *Datasource) query(_ context.Context, pCtx backend.PluginContext, query 
 		return backend.ErrDataResponse(backend.StatusBadRequest, fmt.Sprintf("json unmarshal: %v", err.Error()))
 	}
 
+	// Remove comments from the query
+	queryText := removeComments(qm.QueryText)
+
+	// Connect to the database
+	client, err := mongo.Connect(ctx, mongoOptions.Client().ApplyURI(d.URI))
+	if err != nil {
+		return backend.ErrDataResponse(backend.StatusBadRequest, fmt.Sprintf("unable to connect to MongoDB: %v", err.Error()))
+	}
+
+	// Ping the database
+	if err := client.Ping(ctx, nil); err != nil {
+		return backend.ErrDataResponse(backend.StatusBadRequest, fmt.Sprintf("MongoDB ping failed: %v", err))
+	}
+
+	// Get the database
+	database := client.Database(qm.Database)
+	collection := database.Collection(qm.Collection)
+
+	var bsonQuery bson.M
+	if err := json.Unmarshal([]byte(queryText), &bsonQuery); err != nil {
+		return backend.ErrDataResponse(backend.StatusBadRequest, fmt.Sprintf("query unmarshal: %v", err.Error()))
+	}
+
+	cursor, err := collection.Find(ctx, bsonQuery)
+	if err != nil {
+		return backend.ErrDataResponse(backend.StatusBadRequest, fmt.Sprintf("MongoDB find error: %v", err.Error()))
+	}
+	defer cursor.Close(ctx)
+
+	fieldData := make(map[string][]interface{})
+	firstDoc := true
+
+	for cursor.Next(ctx) {
+		var doc bson.M
+		if err := cursor.Decode(&doc); err != nil {
+			return backend.ErrDataResponse(backend.StatusBadRequest, fmt.Sprintf("cursor decode error: %v", err.Error()))
+		}
+
+		if firstDoc {
+			for key := range doc {
+				fieldData[key] = []interface{}{}
+			}
+			firstDoc = false
+		}
+
+		for key, val := range doc {
+			// Check if the value is an ObjectID and convert it to string
+			if oid, ok := val.(primitive.ObjectID); ok {
+				val = oid.Hex()
+			}
+
+			if slice, exists := fieldData[key]; exists {
+				fieldData[key] = append(slice, val)
+			}
+
+			log.DefaultLogger.Error(fmt.Sprintf(">>>>>>>>OBJ: KEY=%s VALUE=%s", key, val))
+		}
+	}
+
+	log.DefaultLogger.Error(fmt.Sprintf(">>>>>>>>THE THING: %s", fieldData))
 	// create data frame response.
 	// For an overview on data frames and how grafana handles them:
 	// https://grafana.com/developers/plugin-tools/introduction/data-frames
 	frame := data.NewFrame("response")
+	for key, values := range fieldData {
+		frame.Fields = append(frame.Fields, data.NewField(key, nil, values))
+	}
 
-	// add fields.
-	frame.Fields = append(frame.Fields,
-		data.NewField("time", nil, []time.Time{query.TimeRange.From, query.TimeRange.To}),
-		data.NewField("values", nil, []int64{10, 20}),
-	)
+	// // add fields.
+	// frame.Fields = append(frame.Fields,
+	// 	data.NewField("time", nil, []time.Time{query.TimeRange.From, query.TimeRange.To}),
+	// 	data.NewField("values", nil, []int64{10, 20}),
+	// )
 
-	// add the frames to the response.
+	// Build and return response
 	response.Frames = append(response.Frames, frame)
-
 	return response
 }
 
@@ -155,15 +223,8 @@ func (d *Datasource) CheckHealth(ctx context.Context, req *backend.CheckHealthRe
 	}, nil
 }
 
-// GenerateMongoURI generates a MongoDB URI from the provided parameters
-func GenerateMongoURI(uri string, username string, password string, database string) string {
-	// Extract any additional parameters from the URI
-	var params string
-	if idx := strings.Index(uri, "?"); idx != -1 {
-		params = uri[idx:]
-		uri = uri[:idx]
-	}
-
+// generateMongoURI generates a MongoDB URI from the provided parameters
+func generateMongoURI(uri string, username string, password string) string {
 	// Check if URI already starts with "mongodb://" or "mongodb+srv://"
 	if strings.HasPrefix(uri, "mongodb://") || strings.HasPrefix(uri, "mongodb+srv://") {
 		if username != "" && password != "" {
@@ -180,13 +241,18 @@ func GenerateMongoURI(uri string, username string, password string, database str
 		}
 	}
 
-	// Append the database if provided
-	if database != "" {
-		uri = fmt.Sprintf("%s/%s", uri, database)
-	}
-
-	// Append any additional parameters
-	uri += params
-
 	return uri
+}
+
+// removeComments removes comments from a MongoDB query
+func removeComments(query string) string {
+	// Remove single-line comments
+	reSingleLine := regexp.MustCompile(`//.*`)
+	query = reSingleLine.ReplaceAllString(query, "")
+
+	// Remove block comments
+	reBlock := regexp.MustCompile(`/\*.*?\*/`)
+	query = reBlock.ReplaceAllString(query, "")
+
+	return query
 }
