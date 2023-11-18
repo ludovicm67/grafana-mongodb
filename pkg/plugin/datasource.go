@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math/rand"
+	"strings"
 	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
 	"github.com/grafana/grafana-plugin-sdk-go/backend/instancemgmt"
 	"github.com/grafana/grafana-plugin-sdk-go/data"
+
+	"go.mongodb.org/mongo-driver/mongo"
+	mongoOptions "go.mongodb.org/mongo-driver/mongo/options"
 )
 
 // Make sure Datasource implements required interfaces. This is important to do
@@ -23,14 +26,39 @@ var (
 	_ instancemgmt.InstanceDisposer = (*Datasource)(nil)
 )
 
+type JSONDataStruct struct {
+	Username string `json:"username"`
+	URI      string `json:"uri"`
+}
+
 // NewDatasource creates a new datasource instance.
-func NewDatasource(_ context.Context, _ backend.DataSourceInstanceSettings) (instancemgmt.Instance, error) {
-	return &Datasource{}, nil
+func NewDatasource(_ context.Context, settings backend.DataSourceInstanceSettings) (instancemgmt.Instance, error) {
+	// Variable to hold the unmarshaled data
+	var jsonData JSONDataStruct
+
+	// Unmarshal the JSON data into the struct
+	err := json.Unmarshal([]byte(settings.JSONData), &jsonData)
+	if err != nil {
+		return nil, fmt.Errorf("error unmarshalling JSON data: %w", err)
+	}
+
+	// Those are the configured fields from the datasource options
+	uri := jsonData.URI
+	username := jsonData.Username
+	password := settings.DecryptedSecureJSONData["password"]
+
+	datasourceURI := GenerateMongoURI(uri, username, password)
+
+	return &Datasource{
+		URI: datasourceURI,
+	}, nil
 }
 
 // Datasource is an example datasource which can respond to data queries, reports
 // its health and has streaming skills.
-type Datasource struct{}
+type Datasource struct {
+	URI string
+}
 
 // Dispose here tells plugin SDK that plugin wants to clean up resources when a new instance
 // created. As soon as datasource settings change detected by SDK old datasource instance will
@@ -93,17 +121,55 @@ func (d *Datasource) query(_ context.Context, pCtx backend.PluginContext, query 
 // The main use case for these health checks is the test button on the
 // datasource configuration page which allows users to verify that
 // a datasource is working as expected.
-func (d *Datasource) CheckHealth(_ context.Context, req *backend.CheckHealthRequest) (*backend.CheckHealthResult, error) {
+func (d *Datasource) CheckHealth(ctx context.Context, req *backend.CheckHealthRequest) (*backend.CheckHealthResult, error) {
 	var status = backend.HealthStatusOk
-	var message = "Data source is working"
+	var message = "MongoDB connection successful"
 
-	if rand.Int()%2 == 0 {
+	// Connect to the database
+	client, err := mongo.Connect(ctx, mongoOptions.Client().ApplyURI(d.URI))
+	if err != nil {
 		status = backend.HealthStatusError
-		message = "randomized error"
+		message = fmt.Sprintf("Unable to connect to MongoDB: %s", err.Error())
+		return &backend.CheckHealthResult{
+			Status:  status,
+			Message: message,
+		}, nil
+	}
+	defer client.Disconnect(ctx)
+
+	// Ping the database
+	if err := client.Ping(ctx, nil); err != nil {
+		status = backend.HealthStatusError
+		message = fmt.Sprintf("MongoDB ping failed: %v", err)
+		return &backend.CheckHealthResult{
+			Status:  status,
+			Message: message,
+		}, nil
 	}
 
 	return &backend.CheckHealthResult{
 		Status:  status,
 		Message: message,
 	}, nil
+}
+
+func GenerateMongoURI(uri string, username string, password string) string {
+	// Check if URI already starts with "mongodb://"
+	if strings.HasPrefix(uri, "mongodb://") || strings.HasPrefix(uri, "mongodb+srv://") {
+		// If credentials are provided, insert them into the URI
+		if username != "" && password != "" {
+			// Split the URI into two parts: protocol and the rest
+			parts := strings.SplitN(uri, "://", 2)
+			// Rebuild the URI with the credentials
+			return fmt.Sprintf("%s://%s:%s@%s", parts[0], username, password, parts[1])
+		}
+		// If no credentials, return the URI as is
+		return uri
+	}
+
+	// If the URI does not start with "mongodb://", build it with or without credentials
+	if username != "" && password != "" {
+		return fmt.Sprintf("mongodb://%s:%s@%s", username, password, uri)
+	}
+	return fmt.Sprintf("mongodb://%s", uri)
 }
