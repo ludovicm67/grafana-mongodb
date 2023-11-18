@@ -2,9 +2,9 @@
 
 Remove any remaining comments before publishing as these may be displayed on Grafana.com -->
 
-# Mongodb
+# MongoDB
 
-Add support for mongo db
+Add support for MongoDB
 
 <!-- To help maximize the impact of your README and improve usability for users, we propose the following loose structure:
 
