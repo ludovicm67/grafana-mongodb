@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
@@ -99,6 +100,13 @@ type queryModel struct {
 func (d *Datasource) query(ctx context.Context, pCtx backend.PluginContext, query backend.DataQuery) backend.DataResponse {
 	var response backend.DataResponse
 
+	// Recover from panic, and log the error
+	defer func() {
+		if r := recover(); r != nil {
+			log.DefaultLogger.Error(fmt.Sprintf(">>>>>>>> PANIC!!!: %v", r))
+		}
+	}()
+
 	// Unmarshal the JSON into our queryModel.
 	var qm queryModel
 	err := json.Unmarshal(query.JSON, &qm)
@@ -136,14 +144,12 @@ func (d *Datasource) query(ctx context.Context, pCtx backend.PluginContext, quer
 		return backend.ErrDataResponse(backend.StatusBadRequest, fmt.Sprintf("MongoDB find error: %v", err.Error()))
 	}
 	defer cursor.Close(ctx)
-	log.DefaultLogger.Error(fmt.Sprintf(">>>>>>>> After find"))
 
 	// Initialize slice to hold all documents
 	var docs []bson.M
 	if err := cursor.All(ctx, &docs); err != nil {
 		return backend.ErrDataResponse(backend.StatusBadRequest, fmt.Sprintf("cursor all error: %v", err.Error()))
 	}
-	log.DefaultLogger.Error(fmt.Sprintf(">>>>>>>> Before all unique fields"))
 
 	// Identify all unique fields
 	fieldSet := make(map[string]struct{})
@@ -152,8 +158,6 @@ func (d *Datasource) query(ctx context.Context, pCtx backend.PluginContext, quer
 			fieldSet[key] = struct{}{}
 		}
 	}
-
-	log.DefaultLogger.Error(fmt.Sprintf(">>>>>>>> After all unique fields"))
 
 	// Fill missing fields with an empty string and convert all fields to strings
 	for _, doc := range docs {
@@ -172,19 +176,20 @@ func (d *Datasource) query(ctx context.Context, pCtx backend.PluginContext, quer
 		}
 	}
 
-	log.DefaultLogger.Error(fmt.Sprintf(">>>>>>>> Before frame"))
-
-	defer func() {
-		if r := recover(); r != nil {
-			log.DefaultLogger.Error(fmt.Sprintf(">>>>>>>> PANIC!!!: %v", r))
-		}
-	}()
-
 	// Create a frame to store the results
 	frame := data.NewFrame("response")
 
-	// Add fields to the frame
+	// Collect field names in a slice
+	fieldNames := make([]string, 0, len(fieldSet))
 	for key := range fieldSet {
+		fieldNames = append(fieldNames, key)
+	}
+
+	// Sort field names alphanumerically
+	sort.Strings(fieldNames)
+
+	// Add sorted fields to the frame
+	for _, key := range fieldNames {
 		var values []string // Use a slice of strings
 		for _, doc := range docs {
 			val := doc[key]
@@ -199,8 +204,6 @@ func (d *Datasource) query(ctx context.Context, pCtx backend.PluginContext, quer
 		}
 		frame.Fields = append(frame.Fields, data.NewField(key, nil, values))
 	}
-
-	log.DefaultLogger.Error(fmt.Sprintf(">>>>>>>> After all fields were added to the frrame"))
 
 	// Add the frame to the response
 	response.Frames = append(response.Frames, frame)
