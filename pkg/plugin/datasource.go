@@ -9,9 +9,8 @@ import (
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
 	"github.com/grafana/grafana-plugin-sdk-go/backend/instancemgmt"
-	"github.com/grafana/grafana-plugin-sdk-go/data"
-
 	"github.com/grafana/grafana-plugin-sdk-go/backend/log"
+	"github.com/grafana/grafana-plugin-sdk-go/data"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -102,7 +101,6 @@ func (d *Datasource) query(ctx context.Context, pCtx backend.PluginContext, quer
 
 	// Unmarshal the JSON into our queryModel.
 	var qm queryModel
-
 	err := json.Unmarshal(query.JSON, &qm)
 	if err != nil {
 		return backend.ErrDataResponse(backend.StatusBadRequest, fmt.Sprintf("json unmarshal: %v", err.Error()))
@@ -126,64 +124,87 @@ func (d *Datasource) query(ctx context.Context, pCtx backend.PluginContext, quer
 	database := client.Database(qm.Database)
 	collection := database.Collection(qm.Collection)
 
+	// Unmarshal the query text into bson.M
 	var bsonQuery bson.M
 	if err := json.Unmarshal([]byte(queryText), &bsonQuery); err != nil {
 		return backend.ErrDataResponse(backend.StatusBadRequest, fmt.Sprintf("query unmarshal: %v", err.Error()))
 	}
 
+	// Execute the query
 	cursor, err := collection.Find(ctx, bsonQuery)
 	if err != nil {
 		return backend.ErrDataResponse(backend.StatusBadRequest, fmt.Sprintf("MongoDB find error: %v", err.Error()))
 	}
 	defer cursor.Close(ctx)
+	log.DefaultLogger.Error(fmt.Sprintf(">>>>>>>> After find"))
 
-	fieldData := make(map[string][]interface{})
-	firstDoc := true
+	// Initialize slice to hold all documents
+	var docs []bson.M
+	if err := cursor.All(ctx, &docs); err != nil {
+		return backend.ErrDataResponse(backend.StatusBadRequest, fmt.Sprintf("cursor all error: %v", err.Error()))
+	}
+	log.DefaultLogger.Error(fmt.Sprintf(">>>>>>>> Before all unique fields"))
 
-	for cursor.Next(ctx) {
-		var doc bson.M
-		if err := cursor.Decode(&doc); err != nil {
-			return backend.ErrDataResponse(backend.StatusBadRequest, fmt.Sprintf("cursor decode error: %v", err.Error()))
-		}
-
-		if firstDoc {
-			for key := range doc {
-				fieldData[key] = []interface{}{}
-			}
-			firstDoc = false
-		}
-
-		for key, val := range doc {
-			// Check if the value is an ObjectID and convert it to string
-			if oid, ok := val.(primitive.ObjectID); ok {
-				val = oid.Hex()
-			}
-
-			if slice, exists := fieldData[key]; exists {
-				fieldData[key] = append(slice, val)
-			}
-
-			log.DefaultLogger.Error(fmt.Sprintf(">>>>>>>>OBJ: KEY=%s VALUE=%s", key, val))
+	// Identify all unique fields
+	fieldSet := make(map[string]struct{})
+	for _, doc := range docs {
+		for key := range doc {
+			fieldSet[key] = struct{}{}
 		}
 	}
 
-	log.DefaultLogger.Error(fmt.Sprintf(">>>>>>>>THE THING: %s", fieldData))
-	// create data frame response.
-	// For an overview on data frames and how grafana handles them:
-	// https://grafana.com/developers/plugin-tools/introduction/data-frames
+	log.DefaultLogger.Error(fmt.Sprintf(">>>>>>>> After all unique fields"))
+
+	// Fill missing fields with an empty string and convert all fields to strings
+	for _, doc := range docs {
+		for key := range fieldSet {
+			if _, ok := doc[key]; !ok {
+				doc[key] = ""
+			} else {
+				// Convert each field value to a string
+				switch v := doc[key].(type) {
+				case primitive.ObjectID:
+					doc[key] = v.Hex() // Convert ObjectID to string
+				default:
+					doc[key] = fmt.Sprintf("%v", doc[key]) // Convert other types to string
+				}
+			}
+		}
+	}
+
+	log.DefaultLogger.Error(fmt.Sprintf(">>>>>>>> Before frame"))
+
+	defer func() {
+		if r := recover(); r != nil {
+			log.DefaultLogger.Error(fmt.Sprintf(">>>>>>>> PANIC!!!: %v", r))
+		}
+	}()
+
+	// Create a frame to store the results
 	frame := data.NewFrame("response")
-	for key, values := range fieldData {
+
+	// Add fields to the frame
+	for key := range fieldSet {
+		var values []string // Use a slice of strings
+		for _, doc := range docs {
+			val := doc[key]
+			var strVal string
+			switch v := val.(type) {
+			case primitive.ObjectID:
+				strVal = v.Hex() // Convert ObjectID to string
+			default:
+				strVal = fmt.Sprintf("%v", val) // Convert other types to string
+			}
+			values = append(values, strVal)
+		}
 		frame.Fields = append(frame.Fields, data.NewField(key, nil, values))
 	}
 
-	// // add fields.
-	// frame.Fields = append(frame.Fields,
-	// 	data.NewField("time", nil, []time.Time{query.TimeRange.From, query.TimeRange.To}),
-	// 	data.NewField("values", nil, []int64{10, 20}),
-	// )
+	log.DefaultLogger.Error(fmt.Sprintf(">>>>>>>> After all fields were added to the frrame"))
 
-	// Build and return response
+	// Add the frame to the response
 	response.Frames = append(response.Frames, frame)
+
 	return response
 }
 
