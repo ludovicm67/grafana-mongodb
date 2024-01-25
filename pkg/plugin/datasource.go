@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
 	"github.com/grafana/grafana-plugin-sdk-go/backend/instancemgmt"
@@ -92,9 +94,10 @@ func (d *Datasource) QueryData(ctx context.Context, req *backend.QueryDataReques
 }
 
 type queryModel struct {
-	QueryText  string `json:"queryText"`
-	Database   string `json:"database"`
-	Collection string `json:"collection"`
+	QueryText      string `json:"queryText"`
+	Database       string `json:"database"`
+	Collection     string `json:"collection"`
+	TimestampField string `json:"timestampField"`
 }
 
 func (d *Datasource) query(ctx context.Context, pCtx backend.PluginContext, query backend.DataQuery) backend.DataResponse {
@@ -113,6 +116,13 @@ func (d *Datasource) query(ctx context.Context, pCtx backend.PluginContext, quer
 	if err != nil {
 		return backend.ErrDataResponse(backend.StatusBadRequest, fmt.Sprintf("json unmarshal: %v", err.Error()))
 	}
+
+	var timestampField = qm.TimestampField
+	var hasTimestampField = timestampField != ""
+	var from = float64(query.TimeRange.From.UnixNano()) / float64(time.Millisecond)
+	var to = float64(query.TimeRange.To.UnixNano()) / float64(time.Millisecond)
+
+	// return backend.ErrDataResponse(backend.StatusBadRequest, fmt.Sprintf("DEBUG: %v", hasTimestampField))
 
 	// Remove comments from the query
 	queryText := removeComments(qm.QueryText)
@@ -188,10 +198,40 @@ func (d *Datasource) query(ctx context.Context, pCtx backend.PluginContext, quer
 	// Sort field names alphanumerically
 	sort.Strings(fieldNames)
 
+	// Filter documents based on timestamp
+	var filteredDocs []bson.M
+	for _, doc := range docs {
+		// If timestamp field is set, check the timestamp
+		if hasTimestampField {
+			timestampValue, ok := doc[timestampField].(string)
+			if !ok {
+				continue // Skip this document
+			}
+
+			timestamp, err := strconv.ParseFloat(timestampValue, 64)
+			if err != nil {
+				continue // Skip this document
+			}
+
+			if timestamp < from || timestamp > to {
+				continue // Skip this document
+			}
+
+			// Convert the timestamp to time.Time
+			seconds := int64(timestamp / 1000)                                  // Convert milliseconds to seconds
+			nanoseconds := int64((timestamp - float64(seconds)*1000) * 1000000) // Remaining milliseconds to nanoseconds
+			readableTimestamp := time.Unix(seconds, nanoseconds).Format("2006-01-02 15:04:05")
+
+			doc[timestampField] = readableTimestamp
+		}
+
+		filteredDocs = append(filteredDocs, doc)
+	}
+
 	// Add sorted fields to the frame
 	for _, key := range fieldNames {
 		var values []string // Use a slice of strings
-		for _, doc := range docs {
+		for _, doc := range filteredDocs {
 			val := doc[key]
 			var strVal string
 			switch v := val.(type) {
