@@ -5,6 +5,7 @@ export interface MyQuery extends DataQuery {
   queryText?: string;
   database?: string;
   collection?: string;
+  timestampField?: string;
 }
 
 export const DEFAULT_QUERY: Partial<MyQuery> = {

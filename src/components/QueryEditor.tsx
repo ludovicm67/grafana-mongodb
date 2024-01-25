@@ -64,11 +64,15 @@ export function QueryEditor({ query, onChange, onRunQuery }: Props) {
     onChange({ ...query, collection: event.target.value });
   };
 
+  const onTimestampFieldChange = (event: ChangeEvent<HTMLInputElement>) => {
+    onChange({ ...query, timestampField: event.target.value });
+  };
+
   const onDatabaseChange = (event: ChangeEvent<HTMLInputElement>) => {
     onChange({ ...query, database: event.target.value });
   };
 
-  const { queryText, database, collection } = query;
+  const { queryText, database, collection, timestampField } = query;
 
   return (
     <div className="gf-form">
@@ -79,6 +83,9 @@ export function QueryEditor({ query, onChange, onRunQuery }: Props) {
           </InlineField>
           <InlineField label="Collection">
             <Input onChange={onCollectionChange} value={collection} />
+          </InlineField>
+          <InlineField label="Timestamp Field">
+            <Input onChange={onTimestampFieldChange} value={timestampField} />
           </InlineField>
         </InlineFieldRow>
         <InlineFieldRow style={{ width: '100%' }}>
