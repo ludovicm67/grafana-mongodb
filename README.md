@@ -4,10 +4,10 @@ This plugin allows you to connect to a MongoDB database and visualize the data i
 
 ## Installation
 
-If you are using the official Grafana Docker image, you can install this plugin by configuring the following environment variable:
+If you are using the official Grafana Docker image, you can install this plugin by configuring the following environment variables:
 
-- "GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=ludovicm67-mongodb-datasource"
-- "GF_INSTALL_PLUGINS=${PATH_TO_ZIP_ARCHIVE};ludovicm67-mongodb-datasource"
+- `GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS`: `ludovicm67-mongodb-datasource`
+- `GF_INSTALL_PLUGINS`: `${PATH_TO_ZIP_ARCHIVE};ludovicm67-mongodb-datasource`
 
 where `${PATH_TO_ZIP_ARCHIVE}` is the path to the zip archive of the plugin.
 
