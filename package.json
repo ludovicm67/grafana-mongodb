@@ -1,5 +1,5 @@
 {
-  "name": "mongodb",
+  "name": "@ludovicm67/mongodb-datasource",
   "version": "0.0.0",
   "private": true,
   "description": "Add support for MongoDB",
