@@ -8,10 +8,7 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
-    env:
-      # usage of GRAFANA_API_KEY is deprecated
-      # GRAFANA_API_KEY: ${{ secrets.GRAFANA_API_KEY }}
-      GRAFANA_ACCESS_POLICY_TOKEN: ${{ secrets.GRAFANA_ACCESS_POLICY_TOKEN }}
+
     steps:
       - uses: actions/checkout@v3
       - name: Setup Node.js environment
@@ -34,8 +31,7 @@ jobs:
       - name: Check for backend
         id: check-for-backend
         run: |
-          if [ -f "Magefile.go" ]
-          then
+          if [ -f "Magefile.go" ]; then
             echo "has-backend=true" >> $GITHUB_OUTPUT
           fi
 
@@ -52,16 +48,6 @@ jobs:
         with:
           version: latest
           args: buildAll
-
-      - name: Warn missing Grafana access policy token
-        run: |
-          echo Please generate a Grafana access policy token: https://grafana.com/developers/plugin-tools/publish-a-plugin/sign-a-plugin#generate-an-access-policy-token
-          echo Once done please follow the instructions found here: https://github.com/${{github.repository}}/blob/main/README.md#using-github-actions-release-workflow
-        if: ${{ env.GRAFANA_ACCESS_POLICY_TOKEN == '' }}
-
-      - name: Sign plugin
-        run: npm run sign
-        if: ${{ env.GRAFANA_ACCESS_POLICY_TOKEN != '' }}
 
       - name: Get plugin metadata
         id: metadata
