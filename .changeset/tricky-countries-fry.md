@@ -1,0 +1,5 @@
+---
+"mongodb": major
+---
+
+Initial release
