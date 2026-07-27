@@ -8,82 +8,143 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
+  frontend:
+    name: Frontend
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+
       - name: Setup Node.js environment
         uses: actions/setup-node@v7
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version-file: .nvmrc
+          cache: npm
 
       - name: Install dependencies
         run: npm ci
 
       - name: Check types
         run: npm run typecheck
+
       - name: Lint
         run: npm run lint
+
       - name: Unit tests
         run: npm run test:ci
+
       - name: Build frontend
         run: npm run build
 
-      - name: Check for backend
-        id: check-for-backend
-        run: |
-          if [ -f "Magefile.go" ]
-          then
-            echo "has-backend=true" >> $GITHUB_OUTPUT
-          fi
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+
+    # The integration tests in pkg/plugin run against this instance. They are
+    # skipped when MONGODB_URI is unset, so `go test ./...` still works locally
+    # without any infrastructure.
+    services:
+      mongodb:
+        image: mongo:8
+        env:
+          MONGO_INITDB_ROOT_USERNAME: root
+          MONGO_INITDB_ROOT_PASSWORD: example
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v7
 
       - name: Setup Go environment
-        if: steps.check-for-backend.outputs.has-backend == 'true'
         uses: actions/setup-go@v7
         with:
-          go-version: '1.21'
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
 
-      - name: Test backend
-        if: steps.check-for-backend.outputs.has-backend == 'true'
-        uses: magefile/mage-action@v4
-        with:
-          version: latest
-          args: coverage
+      - name: Vet
+        run: go vet ./...
+
+      - name: Unit and MongoDB integration tests
+        env:
+          MONGODB_URI: mongodb://root:example@localhost:27017
+        run: go test -race -cover ./pkg/...
 
       - name: Build backend
-        if: steps.check-for-backend.outputs.has-backend == 'true'
         uses: magefile/mage-action@v4
         with:
           version: latest
           args: buildAll
 
-      - name: Check for E2E
-        id: check-for-e2e
-        run: |
-          if [ -d "cypress" ]
-          then
-            echo "has-e2e=true" >> $GITHUB_OUTPUT
-          fi
+  e2e:
+    name: End to end
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
 
-      - name: Start grafana docker
-        if: steps.check-for-e2e.outputs.has-e2e == 'true'
-        run: docker compose up -d
+      - name: Setup Node.js environment
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
 
-      - name: Run e2e tests
-        id: run-e2e-tests
-        if: steps.check-for-e2e.outputs.has-e2e == 'true'
+      - name: Setup Go environment
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      # Only the Linux build is needed, the plugin runs inside the Grafana container.
+      - name: Build backend
+        uses: magefile/mage-action@v4
+        with:
+          version: latest
+          args: build:linux
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      # Starts Grafana with the plugin mounted, plus a MongoDB seeded from
+      # tests/fixtures/mongodb-init.js. `--wait` blocks on both healthchecks.
+      - name: Start Grafana and MongoDB
+        run: docker compose up -d --wait
+
+      - name: Run end to end tests
+        id: e2e
         run: npm run e2e
 
-      - name: Stop grafana docker
-        if: steps.check-for-e2e.outputs.has-e2e == 'true'
-        run: docker compose down
+      - name: Collect Grafana logs
+        if: always() && steps.e2e.outcome == 'failure'
+        run: docker compose logs --no-color > grafana-logs.txt
 
-      - name: Archive E2E output
+      - name: Archive end to end output
         uses: actions/upload-artifact@v7
-        if: steps.check-for-e2e.outputs.has-e2e == 'true' && steps.run-e2e-tests.outcome != 'success'
+        if: always() && steps.e2e.outcome == 'failure'
         with:
-          name: cypress-videos
-          path: cypress/videos
+          name: e2e-report
+          path: |
+            playwright-report/
+            e2e-results/
+            grafana-logs.txt
           retention-days: 5
+
+      - name: Stop Grafana and MongoDB
+        if: always()
+        run: docker compose down -v

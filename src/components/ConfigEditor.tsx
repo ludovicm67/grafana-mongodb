@@ -1,9 +1,10 @@
 import React, { ChangeEvent } from 'react';
 import { InlineField, Input, SecretInput } from '@grafana/ui';
 import { DataSourcePluginOptionsEditorProps } from '@grafana/data';
-import { MyDataSourceOptions, MySecureJsonData } from '../types';
+import { MongoDataSourceOptions, MongoSecureJsonData } from '../types';
+import { testIds } from '../testIds';
 
-interface Props extends DataSourcePluginOptionsEditorProps<MyDataSourceOptions> {}
+interface Props extends DataSourcePluginOptionsEditorProps<MongoDataSourceOptions, MongoSecureJsonData> {}
 
 export function ConfigEditor(props: Props) {
   const { onOptionsChange, options } = props;
@@ -29,6 +30,7 @@ export function ConfigEditor(props: Props) {
     onOptionsChange({
       ...options,
       secureJsonData: {
+        ...options.secureJsonData,
         password: event.target.value,
       },
     });
@@ -49,22 +51,35 @@ export function ConfigEditor(props: Props) {
   };
 
   const { jsonData, secureJsonFields } = options;
-  const secureJsonData = (options.secureJsonData || {}) as MySecureJsonData;
+  const secureJsonData = options.secureJsonData ?? {};
 
   return (
     <div className="gf-form-group">
       <InlineField label="MongoDB URI" labelWidth={16}>
-        <Input onChange={onUriChange} value={jsonData.uri || ''} placeholder="mongodb://localhost:27017" width={40} />
+        <Input
+          data-testid={testIds.configEditor.uri}
+          onChange={onUriChange}
+          value={jsonData.uri ?? ''}
+          placeholder="mongodb://localhost:27017"
+          width={40}
+        />
       </InlineField>
       <InlineField label="Username" labelWidth={16}>
-        <Input onChange={onUsernameChange} value={jsonData.username || ''} placeholder="admin" width={40} />
+        <Input
+          data-testid={testIds.configEditor.username}
+          onChange={onUsernameChange}
+          value={jsonData.username ?? ''}
+          placeholder="admin"
+          width={40}
+        />
       </InlineField>
       <InlineField label="Password" labelWidth={16}>
         <SecretInput
-          isConfigured={(secureJsonFields && secureJsonFields.password) as boolean}
+          data-testid={testIds.configEditor.password}
+          isConfigured={Boolean(secureJsonFields?.password)}
           onReset={onResetPassword}
           onChange={onPasswordChange}
-          value={secureJsonData.password || ''}
+          value={secureJsonData.password ?? ''}
           placeholder="example"
           width={40}
           autoComplete="new-password"

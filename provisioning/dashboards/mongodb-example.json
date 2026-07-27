@@ -1,0 +1,75 @@
+{
+  "uid": "mongodb-example",
+  "title": "MongoDB example",
+  "tags": ["mongodb"],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "Fruits",
+      "description": "A plain collection query, without any time filtering.",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
+      "datasource": {
+        "type": "ludovicm67-mongodb-datasource",
+        "uid": "mongodb-datasource-dev"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "database": "grafana",
+          "collection": "fruits",
+          "queryText": "{}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "table",
+      "title": "Logs on the dashboard time range",
+      "description": "Uses the \"Timestamp Field\" option to keep only the documents inside the selected time range.",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
+      "datasource": {
+        "type": "ludovicm67-mongodb-datasource",
+        "uid": "mongodb-datasource-dev"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "database": "grafana",
+          "collection": "logs",
+          "queryText": "{}",
+          "timestampField": "timestamp"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "table",
+      "title": "Errors only",
+      "description": "Shows that MongoDB query operators are supported.",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 9 },
+      "datasource": {
+        "type": "ludovicm67-mongodb-datasource",
+        "uid": "mongodb-datasource-dev"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "database": "grafana",
+          "collection": "logs",
+          "queryText": "// only the error level\n{ \"level\": \"error\" }",
+          "timestampField": "timestamp"
+        }
+      ]
+    }
+  ]
+}

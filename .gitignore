@@ -26,8 +26,13 @@ artifacts/
 work/
 ci/
 e2e-results/
-**/cypress/videos
-**/cypress/report.json
+
+# Playwright
+playwright-report/
+test-results/
+blob-report/
+playwright/.cache/
+playwright/.auth/
 
 # Editor
 .idea

@@ -1,14 +1,43 @@
 services:
   grafana:
-    container_name: 'ludovicm67-mongodb-datasource'
-    platform: 'linux/amd64'
     build:
-      context: ./.config
       args:
-        grafana_image: ${GRAFANA_IMAGE:-grafana-enterprise}
-        grafana_version: ${GRAFANA_VERSION:-10.0.3}
+        grafana_version: ${GRAFANA_VERSION:-13.1.1}
+    # `!override` replaces the port list coming from the base file instead of
+    # appending to it, so the host ports stay configurable and several plugin
+    # stacks can run side by side.
+    ports: !override
+      - ${GRAFANA_PORT:-3000}:3000/tcp
+      - ${GRAFANA_DEBUG_PORT:-2345}:2345/tcp # delve
+    extends:
+      file: .config/docker-compose-base.yaml
+      service: grafana
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    # Lets `docker compose up --wait` block until Grafana is actually serving.
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -sf http://localhost:3000/api/health || exit 1']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+
+  mongodb:
+    image: ${MONGODB_IMAGE:-mongo}:${MONGODB_VERSION:-8}
+    container_name: 'ludovicm67-mongodb-datasource-mongodb'
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_USERNAME:-root}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_PASSWORD:-example}
     ports:
-      - 3000:3000/tcp
+      - ${MONGODB_PORT:-27017}:27017/tcp
     volumes:
-      - ./dist:/var/lib/grafana/plugins/ludovicm67-mongodb-datasource
-      - ./provisioning:/etc/grafana/provisioning
+      # Seed the instance with the data the dev dashboards and the e2e tests expect.
+      # Scripts in this directory only run when the data directory is empty.
+      - ./tests/fixtures/mongodb-init.js:/docker-entrypoint-initdb.d/01-seed.js:ro
+    healthcheck:
+      test: ['CMD', 'mongosh', '--quiet', '--eval', "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s

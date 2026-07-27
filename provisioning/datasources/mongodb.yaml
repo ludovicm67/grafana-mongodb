@@ -1,0 +1,15 @@
+apiVersion: 1
+
+datasources:
+  - name: MongoDB
+    uid: mongodb-datasource-dev
+    type: ludovicm67-mongodb-datasource
+    access: proxy
+    isDefault: true
+    editable: true
+    jsonData:
+      # `mongodb` is the service name from docker-compose.yaml.
+      uri: mongodb://mongodb:27017
+      username: root
+    secureJsonData:
+      password: example
