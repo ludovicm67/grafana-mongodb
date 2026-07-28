@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,9 +99,9 @@ func seed(t *testing.T, client *mongo.Client) {
 	})
 }
 
-// runQuery executes a single query and fails the test if the datasource
+// queryFrame executes a single query and fails the test if the datasource
 // returned an error response.
-func runQuery(t *testing.T, ds *Datasource, model queryModel, timeRange backend.TimeRange) *data.Frame {
+func queryFrame(t *testing.T, ds *Datasource, model queryModel, timeRange backend.TimeRange) *data.Frame {
 	t.Helper()
 
 	rawQuery, err := json.Marshal(model)
@@ -200,7 +201,7 @@ func TestIntegrationCheckHealthUnreachable(t *testing.T) {
 func TestIntegrationQueryAllDocuments(t *testing.T) {
 	ds := newTestDatasource(t)
 
-	frame := runQuery(t, ds, queryModel{
+	frame := queryFrame(t, ds, queryModel{
 		Database:   testDatabase,
 		Collection: testCollection,
 		QueryText:  "{}",
@@ -236,7 +237,7 @@ func TestIntegrationQueryAllDocuments(t *testing.T) {
 func TestIntegrationQueryWithFilter(t *testing.T) {
 	ds := newTestDatasource(t)
 
-	frame := runQuery(t, ds, queryModel{
+	frame := queryFrame(t, ds, queryModel{
 		Database:   testDatabase,
 		Collection: testCollection,
 		QueryText:  `{"level": "info"}`,
@@ -251,7 +252,7 @@ func TestIntegrationQueryWithFilter(t *testing.T) {
 func TestIntegrationQueryWithOperatorAndComments(t *testing.T) {
 	ds := newTestDatasource(t)
 
-	frame := runQuery(t, ds, queryModel{
+	frame := queryFrame(t, ds, queryModel{
 		Database:   testDatabase,
 		Collection: testCollection,
 		QueryText: `// only keep the documents above 1
@@ -268,7 +269,7 @@ func TestIntegrationQueryHonoursTimeRange(t *testing.T) {
 	ds := newTestDatasource(t)
 
 	// This range covers the first two documents but not the one two days later.
-	frame := runQuery(t, ds, queryModel{
+	frame := queryFrame(t, ds, queryModel{
 		Database:       testDatabase,
 		Collection:     testCollection,
 		QueryText:      "{}",
@@ -299,7 +300,7 @@ func TestIntegrationQueryUnknownCollection(t *testing.T) {
 
 	// Querying a collection that does not exist is not an error for MongoDB,
 	// it simply returns nothing.
-	frame := runQuery(t, ds, queryModel{
+	frame := queryFrame(t, ds, queryModel{
 		Database:   testDatabase,
 		Collection: "does_not_exist",
 		QueryText:  "{}",
@@ -335,5 +336,307 @@ func TestIntegrationQueryInvalidQueryText(t *testing.T) {
 	}
 	if res.Status != backend.StatusBadRequest {
 		t.Errorf("status = %v, want %v", res.Status, backend.StatusBadRequest)
+	}
+}
+
+// queryError runs a query that is expected to fail and returns its message.
+func queryError(t *testing.T, ds *Datasource, model queryModel) string {
+	t.Helper()
+
+	rawQuery, err := json.Marshal(model)
+	if err != nil {
+		t.Fatalf("failed to marshal the query: %v", err)
+	}
+
+	resp, err := ds.QueryData(t.Context(), &backend.QueryDataRequest{
+		Queries: []backend.DataQuery{{RefID: "A", JSON: rawQuery, TimeRange: fullRange()}},
+	})
+	if err != nil {
+		t.Fatalf("QueryData returned an error: %v", err)
+	}
+
+	res := resp.Responses["A"]
+	if res.Error == nil {
+		t.Fatalf("expected an error response, got frames: %v", res.Frames)
+	}
+	if res.Status != backend.StatusBadRequest {
+		t.Errorf("status = %v, want %v", res.Status, backend.StatusBadRequest)
+	}
+	return res.Error.Error()
+}
+
+func TestIntegrationFindWithProjection(t *testing.T) {
+	ds := newTestDatasource(t)
+
+	frame := queryFrame(t, ds, queryModel{
+		QueryType:  QueryTypeFind,
+		Database:   testDatabase,
+		Collection: testCollection,
+		QueryText:  "{}",
+		Projection: `{"name": 1, "_id": 0}`,
+	}, fullRange())
+
+	fieldNames := make([]string, 0, len(frame.Fields))
+	for _, field := range frame.Fields {
+		fieldNames = append(fieldNames, field.Name)
+	}
+	if want := "[name]"; fmt.Sprint(fieldNames) != want {
+		t.Errorf("fields = %v, want %v", fieldNames, want)
+	}
+}
+
+func TestIntegrationFindWithSort(t *testing.T) {
+	ds := newTestDatasource(t)
+
+	frame := queryFrame(t, ds, queryModel{
+		QueryType:  QueryTypeFind,
+		Database:   testDatabase,
+		Collection: testCollection,
+		QueryText:  "{}",
+		Sort:       `{"value": -1}`,
+	}, fullRange())
+
+	names := stringValues(t, fieldByName(t, frame, "name"))
+	if fmt.Sprint(names) != fmt.Sprint([]string{"gamma", "beta", "alpha"}) {
+		t.Errorf("names = %v, want [gamma beta alpha]", names)
+	}
+}
+
+func TestIntegrationFindWithLimitAndSkip(t *testing.T) {
+	ds := newTestDatasource(t)
+
+	frame := queryFrame(t, ds, queryModel{
+		QueryType:  QueryTypeFind,
+		Database:   testDatabase,
+		Collection: testCollection,
+		QueryText:  "{}",
+		Sort:       `{"value": 1}`,
+		Skip:       1,
+		Limit:      1,
+	}, fullRange())
+
+	names := stringValues(t, fieldByName(t, frame, "name"))
+	if fmt.Sprint(names) != fmt.Sprint([]string{"beta"}) {
+		t.Errorf("names = %v, want [beta]", names)
+	}
+}
+
+func TestIntegrationFindRejectsNegativeLimitAndSkip(t *testing.T) {
+	ds := newTestDatasource(t)
+
+	base := queryModel{QueryType: QueryTypeFind, Database: testDatabase, Collection: testCollection, QueryText: "{}"}
+
+	negativeLimit := base
+	negativeLimit.Limit = -1
+	if msg := queryError(t, ds, negativeLimit); !strings.Contains(msg, "limit") {
+		t.Errorf("error = %q, want it to mention the limit", msg)
+	}
+
+	negativeSkip := base
+	negativeSkip.Skip = -1
+	if msg := queryError(t, ds, negativeSkip); !strings.Contains(msg, "skip") {
+		t.Errorf("error = %q, want it to mention the skip", msg)
+	}
+}
+
+func TestIntegrationAggregate(t *testing.T) {
+	ds := newTestDatasource(t)
+
+	// One group per level, with the number of documents in each.
+	frame := queryFrame(t, ds, queryModel{
+		QueryType:  QueryTypeAggregate,
+		Database:   testDatabase,
+		Collection: testCollection,
+		Pipeline: `[
+			{"$group": {"_id": "$level", "total": {"$sum": 1}}},
+			{"$sort": {"_id": 1}}
+		]`,
+	}, fullRange())
+
+	ids := stringValues(t, fieldByName(t, frame, "_id"))
+	if fmt.Sprint(ids) != fmt.Sprint([]string{"error", "info"}) {
+		t.Fatalf("_id = %v, want [error info]", ids)
+	}
+
+	totals := stringValues(t, fieldByName(t, frame, "total"))
+	if fmt.Sprint(totals) != fmt.Sprint([]string{"1", "2"}) {
+		t.Errorf("totals = %v, want [1 2]", totals)
+	}
+}
+
+func TestIntegrationAggregateRejectsADocument(t *testing.T) {
+	ds := newTestDatasource(t)
+
+	msg := queryError(t, ds, queryModel{
+		QueryType:  QueryTypeAggregate,
+		Database:   testDatabase,
+		Collection: testCollection,
+		Pipeline:   `{"$match": {}}`,
+	})
+	if !strings.Contains(msg, "array of stages") {
+		t.Errorf("error = %q, want it to explain that a pipeline is an array", msg)
+	}
+}
+
+func TestIntegrationCount(t *testing.T) {
+	ds := newTestDatasource(t)
+
+	frame := queryFrame(t, ds, queryModel{
+		QueryType:  QueryTypeCount,
+		Database:   testDatabase,
+		Collection: testCollection,
+		QueryText:  "{}",
+	}, fullRange())
+
+	count := fieldByName(t, frame, "count")
+	if count.Len() != 1 {
+		t.Fatalf("count field has %d values, want 1", count.Len())
+	}
+	if got := count.At(0); got != int64(3) {
+		t.Errorf("count = %v, want 3", got)
+	}
+}
+
+func TestIntegrationCountWithFilter(t *testing.T) {
+	ds := newTestDatasource(t)
+
+	frame := queryFrame(t, ds, queryModel{
+		QueryType:  QueryTypeCount,
+		Database:   testDatabase,
+		Collection: testCollection,
+		QueryText:  `{"level": "info"}`,
+	}, fullRange())
+
+	if got := fieldByName(t, frame, "count").At(0); got != int64(2) {
+		t.Errorf("count = %v, want 2", got)
+	}
+}
+
+// Count has no document list to filter afterwards, so the time range is pushed
+// into the query itself.
+func TestIntegrationCountHonoursTimeRange(t *testing.T) {
+	ds := newTestDatasource(t)
+
+	frame := queryFrame(t, ds, queryModel{
+		QueryType:      QueryTypeCount,
+		Database:       testDatabase,
+		Collection:     testCollection,
+		QueryText:      "{}",
+		TimestampField: "timestamp",
+	}, backend.TimeRange{From: baseTime.Add(-time.Hour), To: baseTime.Add(2 * time.Hour)})
+
+	if got := fieldByName(t, frame, "count").At(0); got != int64(2) {
+		t.Errorf("count = %v, want 2 (the third document is two days later)", got)
+	}
+}
+
+// The same filter combined with a time range must not lose either half.
+func TestIntegrationCountCombinesFilterAndTimeRange(t *testing.T) {
+	ds := newTestDatasource(t)
+
+	frame := queryFrame(t, ds, queryModel{
+		QueryType:      QueryTypeCount,
+		Database:       testDatabase,
+		Collection:     testCollection,
+		QueryText:      `{"level": "info"}`,
+		TimestampField: "timestamp",
+	}, backend.TimeRange{From: baseTime.Add(-time.Hour), To: baseTime.Add(2 * time.Hour)})
+
+	if got := fieldByName(t, frame, "count").At(0); got != int64(1) {
+		t.Errorf("count = %v, want 1 (only alpha is both info and inside the range)", got)
+	}
+}
+
+func TestIntegrationDistinct(t *testing.T) {
+	ds := newTestDatasource(t)
+
+	frame := queryFrame(t, ds, queryModel{
+		QueryType:     QueryTypeDistinct,
+		Database:      testDatabase,
+		Collection:    testCollection,
+		DistinctField: "level",
+	}, fullRange())
+
+	levels := stringValues(t, fieldByName(t, frame, "level"))
+	if fmt.Sprint(levels) != fmt.Sprint([]string{"error", "info"}) {
+		t.Errorf("levels = %v, want [error info]", levels)
+	}
+}
+
+func TestIntegrationDistinctWithFilter(t *testing.T) {
+	ds := newTestDatasource(t)
+
+	frame := queryFrame(t, ds, queryModel{
+		QueryType:     QueryTypeDistinct,
+		Database:      testDatabase,
+		Collection:    testCollection,
+		DistinctField: "name",
+		QueryText:     `{"level": "info"}`,
+	}, fullRange())
+
+	names := stringValues(t, fieldByName(t, frame, "name"))
+	if fmt.Sprint(names) != fmt.Sprint([]string{"alpha", "gamma"}) {
+		t.Errorf("names = %v, want [alpha gamma]", names)
+	}
+}
+
+func TestIntegrationDistinctRequiresAField(t *testing.T) {
+	ds := newTestDatasource(t)
+
+	msg := queryError(t, ds, queryModel{
+		QueryType:  QueryTypeDistinct,
+		Database:   testDatabase,
+		Collection: testCollection,
+	})
+	if !strings.Contains(msg, "distinct") {
+		t.Errorf("error = %q, want it to mention the missing distinct field", msg)
+	}
+}
+
+// Documents may store their date as a BSON date rather than as a number of
+// milliseconds, and both have to work.
+func TestIntegrationTimeRangeWorksWithBSONDates(t *testing.T) {
+	ds := newTestDatasource(t)
+
+	collection := ds.client.Database(testDatabase).Collection("dated_events")
+	if err := collection.Drop(t.Context()); err != nil {
+		t.Fatalf("failed to drop the collection: %v", err)
+	}
+	t.Cleanup(func() { _ = collection.Drop(context.Background()) })
+
+	if _, err := collection.InsertMany(t.Context(), []any{
+		bson.M{"name": "inside", "timestamp": baseTime},
+		bson.M{"name": "outside", "timestamp": baseTime.Add(48 * time.Hour)},
+	}); err != nil {
+		t.Fatalf("failed to seed the collection: %v", err)
+	}
+
+	narrow := backend.TimeRange{From: baseTime.Add(-time.Hour), To: baseTime.Add(time.Hour)}
+
+	// find drops the documents once they are read back.
+	found := queryFrame(t, ds, queryModel{
+		QueryType:      QueryTypeFind,
+		Database:       testDatabase,
+		Collection:     "dated_events",
+		QueryText:      "{}",
+		TimestampField: "timestamp",
+	}, narrow)
+
+	names := stringValues(t, fieldByName(t, found, "name"))
+	if fmt.Sprint(names) != fmt.Sprint([]string{"inside"}) {
+		t.Errorf("find names = %v, want [inside]", names)
+	}
+
+	// count pushes the range into the query, which has to match dates too.
+	counted := queryFrame(t, ds, queryModel{
+		QueryType:      QueryTypeCount,
+		Database:       testDatabase,
+		Collection:     "dated_events",
+		QueryText:      "{}",
+		TimestampField: "timestamp",
+	}, narrow)
+
+	if got := fieldByName(t, counted, "count").At(0); got != int64(1) {
+		t.Errorf("count = %v, want 1", got)
 	}
 }

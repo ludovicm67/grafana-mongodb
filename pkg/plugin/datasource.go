@@ -5,17 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
-	"sort"
-	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
 	"github.com/grafana/grafana-plugin-sdk-go/backend/instancemgmt"
 	"github.com/grafana/grafana-plugin-sdk-go/backend/log"
-	"github.com/grafana/grafana-plugin-sdk-go/data"
 
-	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	mongoOptions "go.mongodb.org/mongo-driver/v2/mongo/options"
 )
@@ -54,6 +51,11 @@ type JSONDataStruct struct {
 type Datasource struct {
 	URI    string
 	client *mongo.Client
+
+	// The resource handler is built on first use, so that a zero value
+	// Datasource stays usable.
+	resourcesOnce sync.Once
+	resources     backend.CallResourceHandler
 }
 
 // NewDatasource creates a new datasource instance.
@@ -132,13 +134,6 @@ func (d *Datasource) QueryData(ctx context.Context, req *backend.QueryDataReques
 	return response, nil
 }
 
-type queryModel struct {
-	QueryText      string `json:"queryText"`
-	Database       string `json:"database"`
-	Collection     string `json:"collection"`
-	TimestampField string `json:"timestampField"`
-}
-
 func (d *Datasource) query(ctx context.Context, _ backend.PluginContext, query backend.DataQuery) (response backend.DataResponse) {
 	// Recover from panic, and turn it into an error response instead of taking
 	// the whole plugin process down.
@@ -155,110 +150,16 @@ func (d *Datasource) query(ctx context.Context, _ backend.PluginContext, query b
 		return backend.ErrDataResponse(backend.StatusBadRequest, fmt.Sprintf("json unmarshal: %v", err.Error()))
 	}
 
-	if qm.Database == "" {
-		return backend.ErrDataResponse(backend.StatusBadRequest, "no database was specified")
-	}
-	if qm.Collection == "" {
-		return backend.ErrDataResponse(backend.StatusBadRequest, "no collection was specified")
+	if err := qm.validate(); err != nil {
+		return backend.ErrDataResponse(backend.StatusBadRequest, err.Error())
 	}
 	if d.client == nil {
 		return backend.ErrDataResponse(backend.StatusInternal, "the MongoDB client is not initialized")
 	}
 
-	timestampField := qm.TimestampField
-	hasTimestampField := timestampField != ""
-	from := float64(query.TimeRange.From.UnixNano()) / float64(time.Millisecond)
-	to := float64(query.TimeRange.To.UnixNano()) / float64(time.Millisecond)
-
-	// Remove comments from the query
-	queryText := strings.TrimSpace(removeComments(qm.QueryText))
-	if queryText == "" {
-		queryText = "{}"
-	}
-
-	// Unmarshal the query text into bson.M
-	var bsonQuery bson.M
-	if err := bson.UnmarshalExtJSON([]byte(queryText), false, &bsonQuery); err != nil {
-		return backend.ErrDataResponse(backend.StatusBadRequest, fmt.Sprintf("query unmarshal: %v", err.Error()))
-	}
-
 	collection := d.client.Database(qm.Database).Collection(qm.Collection)
 
-	// Execute the query
-	cursor, err := collection.Find(ctx, bsonQuery)
-	if err != nil {
-		return backend.ErrDataResponse(backend.StatusBadRequest, fmt.Sprintf("MongoDB find error: %v", err.Error()))
-	}
-	defer func() {
-		if err := cursor.Close(ctx); err != nil {
-			log.DefaultLogger.Warn("failed to close the MongoDB cursor", "error", err)
-		}
-	}()
-
-	// Initialize slice to hold all documents
-	var docs []bson.M
-	if err := cursor.All(ctx, &docs); err != nil {
-		return backend.ErrDataResponse(backend.StatusBadRequest, fmt.Sprintf("cursor all error: %v", err.Error()))
-	}
-
-	// Identify all unique fields
-	fieldSet := make(map[string]struct{})
-	for _, doc := range docs {
-		for key := range doc {
-			fieldSet[key] = struct{}{}
-		}
-	}
-
-	// Collect field names in a slice, sorted alphanumerically so that the
-	// resulting frame is stable between queries.
-	fieldNames := make([]string, 0, len(fieldSet))
-	for key := range fieldSet {
-		fieldNames = append(fieldNames, key)
-	}
-	sort.Strings(fieldNames)
-
-	// Filter documents on the dashboard time range when a timestamp field is set.
-	filteredDocs := make([]bson.M, 0, len(docs))
-	timestamps := make([]time.Time, 0, len(docs))
-	for _, doc := range docs {
-		if hasTimestampField {
-			timestamp, ok := toEpochMillis(doc[timestampField])
-			if !ok {
-				continue // Skip this document
-			}
-
-			if timestamp < from || timestamp > to {
-				continue // Skip this document
-			}
-
-			timestamps = append(timestamps, time.UnixMilli(int64(timestamp)).UTC())
-		}
-
-		filteredDocs = append(filteredDocs, doc)
-	}
-
-	// Create a frame to store the results
-	frame := data.NewFrame("response")
-
-	// Add sorted fields to the frame. The timestamp field is exposed as a real
-	// time field so that Grafana can use it on the time axis.
-	for _, key := range fieldNames {
-		if hasTimestampField && key == timestampField {
-			frame.Fields = append(frame.Fields, data.NewField(key, nil, timestamps))
-			continue
-		}
-
-		values := make([]string, 0, len(filteredDocs))
-		for _, doc := range filteredDocs {
-			values = append(values, stringify(doc[key]))
-		}
-		frame.Fields = append(frame.Fields, data.NewField(key, nil, values))
-	}
-
-	// Add the frame to the response
-	response.Frames = append(response.Frames, frame)
-
-	return response
+	return runQuery(ctx, collection, qm, newTimeRange(query.TimeRange))
 }
 
 // CheckHealth handles health checks sent from Grafana to the plugin.
@@ -285,49 +186,6 @@ func (d *Datasource) CheckHealth(ctx context.Context, _ *backend.CheckHealthRequ
 		Status:  backend.HealthStatusOk,
 		Message: "MongoDB connection successful",
 	}, nil
-}
-
-// stringify converts a BSON value into its string representation.
-func stringify(value any) string {
-	switch v := value.(type) {
-	case nil:
-		return ""
-	case string:
-		return v
-	case bson.ObjectID:
-		return v.Hex()
-	case bson.DateTime:
-		return v.Time().UTC().Format(time.RFC3339Nano)
-	case time.Time:
-		return v.UTC().Format(time.RFC3339Nano)
-	default:
-		return fmt.Sprintf("%v", value)
-	}
-}
-
-// toEpochMillis converts a BSON value into a UNIX timestamp in milliseconds.
-// It reports whether the conversion succeeded.
-func toEpochMillis(value any) (float64, bool) {
-	switch v := value.(type) {
-	case bson.DateTime:
-		return float64(v), true
-	case time.Time:
-		return float64(v.UnixMilli()), true
-	case int32:
-		return float64(v), true
-	case int64:
-		return float64(v), true
-	case float64:
-		return v, true
-	case string:
-		parsed, err := strconv.ParseFloat(v, 64)
-		if err != nil {
-			return 0, false
-		}
-		return parsed, true
-	default:
-		return 0, false
-	}
 }
 
 // generateMongoURI generates a MongoDB URI from the provided parameters

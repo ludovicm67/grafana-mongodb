@@ -20,19 +20,60 @@ You can browse the [latest releases of the plugin](https://github.com/ludovicm67
 Configure the datasource with the URI of your MongoDB instance (for example `mongodb://localhost:27017`),
 and optionally a username and a password.
 
-A query is made of:
+Every query targets a **Database** and a **Collection**. Both are required, and the query is only
+sent once they are filled in. Until then the editor marks them as invalid.
 
-- **Database** and **Collection**: what to query. Both are required, and the query is only
-  sent once they are filled in. Until then the editor marks them as invalid.
-- **Query**: a MongoDB filter document, written as
-  [extended JSON](https://www.mongodb.com/docs/manual/reference/mongodb-extended-json/).
-  Query operators (`$gt`, `$and`, `$regex`, …) and the `$oid` / `$date` wrappers are supported,
-  and `//` and `/* … */` comments are stripped before the query is sent.
-- **Timestamp Field** (optional): the name of a field holding a UNIX timestamp in milliseconds
-  or a BSON date. When set, only the documents falling inside the dashboard time range are
-  returned, and the field is exposed as a real time field so it can be used on a time axis.
+The **Database**, **Collection**, **Timestamp Field** and **Field** inputs suggest what exists on
+the instance: the databases, then the collections of the selected database, then the field names
+found in a sample of its documents. The suggestions are only a convenience, and any value can still
+be typed, which matters when a collection does not exist yet, when the user is not allowed to list
+them, or when a dashboard variable is used. If listing fails, the reason is shown in the dropdown
+and the input keeps working.
 
-Every other field is returned as text.
+Filters and pipelines are written as
+[extended JSON](https://www.mongodb.com/docs/manual/reference/mongodb-extended-json/), which is
+regular JSON plus the MongoDB wrappers. Query operators (`$gt`, `$and`, `$regex`, …) and the
+`$oid` / `$date` wrappers are supported, and `//` and `/* … */` comments are stripped before the
+query is sent.
+
+### Query types
+
+**Find** returns the documents matching a filter. It has four extra options:
+
+| Option     | Example                   | Effect                                                         |
+| ---------- | ------------------------- | -------------------------------------------------------------- |
+| Projection | `{ "name": 1, "_id": 0 }` | Which fields to return                                         |
+| Sort       | `{ "timestamp": -1 }`     | How to order the documents. The order of the keys is preserved |
+| Limit      | `100`                     | Maximum number of documents. Empty or `0` means no limit       |
+| Skip       | `20`                      | How many documents to skip first                               |
+
+**Aggregate** runs an [aggregation pipeline](https://www.mongodb.com/docs/manual/aggregation/),
+written as an array of stages:
+
+```json
+[
+  { "$match": { "level": "error" } },
+  { "$group": { "_id": "$service", "total": { "$sum": 1 } } },
+  { "$sort": { "total": -1 } }
+]
+```
+
+**Count** returns how many documents match a filter, as a single value. Useful for a stat panel.
+
+**Distinct** returns the unique values of a field, optionally restricted by a filter.
+
+### Time range
+
+**Timestamp Field** is optional on every query type. It names a field holding either a UNIX
+timestamp in milliseconds or a BSON date, and restricts the query to the dashboard time range.
+
+- For **Find** and **Aggregate**, the returned documents are filtered, and the field is exposed
+  as a real time field so it can be used on a time axis.
+- For **Count** and **Distinct** there is no document list to filter, so the range is pushed into
+  the query itself. Both the numeric and the date representation are matched, so it works whichever
+  way the documents store their date.
+
+Every field other than the timestamp is returned as text.
 
 ## Development
 
@@ -65,6 +106,11 @@ Useful companion commands:
 npm run server:logs  # follow the Grafana and MongoDB logs
 npm run server:down  # stop everything and drop the seeded data
 ```
+
+The `logs` fixtures are dated relative to the moment the MongoDB container starts, and the seed
+script only runs on a fresh container. A stack left running for hours therefore ends up with
+documents that fall outside the default dashboard time range. `npm run server:down && npm run server`
+seeds them again.
 
 Grafana has to be restarted after a backend rebuild, so that it picks up the new binary:
 
@@ -132,14 +178,14 @@ Every dependency is on its latest release except the ones below, each blocked by
 upstream. Dependabot is configured to skip the updates that cannot be merged, so a red
 Dependabot PR means something has genuinely changed.
 
-| Dependency | Held at | Blocked by |
-| --- | --- | --- |
-| `react`, `react-dom`, `@types/react`, `@types/react-dom` | 18 | `@grafana/ui` 13 declares `react@^18` as a peer dependency. The plugin uses Grafana's own React at runtime, so this has to match. |
-| `typescript` | 6 | `@typescript-eslint` 8, the latest release, caps TypeScript at `<6.1.0`. |
-| `eslint` | 9 | `eslint-plugin-react` 7.37.5, the latest release, supports at most `eslint@^9.7`. ESLint 10 removed `context.getFilename()`, which the plugin still calls. |
-| `@grafana/eslint-config` | 9 | v10 dropped the `./flat.js` entry point that the generated `.config/eslint.config.mjs` imports. |
-| `@stylistic/eslint-plugin-ts` | 4 | Required as a peer dependency by `@grafana/eslint-config` 9. Superseded upstream by `@stylistic/eslint-plugin`, which v10 uses instead. |
-| `webpack-subresource-integrity` | 5.1 | 5.2 is a release candidate only. |
+| Dependency                                               | Held at | Blocked by                                                                                                                                                 |
+| -------------------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `react`, `react-dom`, `@types/react`, `@types/react-dom` | 18      | `@grafana/ui` 13 declares `react@^18` as a peer dependency. The plugin uses Grafana's own React at runtime, so this has to match.                          |
+| `typescript`                                             | 6       | `@typescript-eslint` 8, the latest release, caps TypeScript at `<6.1.0`.                                                                                   |
+| `eslint`                                                 | 9       | `eslint-plugin-react` 7.37.5, the latest release, supports at most `eslint@^9.7`. ESLint 10 removed `context.getFilename()`, which the plugin still calls. |
+| `@grafana/eslint-config`                                 | 9       | v10 dropped the `./flat.js` entry point that the generated `.config/eslint.config.mjs` imports.                                                            |
+| `@stylistic/eslint-plugin-ts`                            | 4       | Required as a peer dependency by `@grafana/eslint-config` 9. Superseded upstream by `@stylistic/eslint-plugin`, which v10 uses instead.                    |
+| `webpack-subresource-integrity`                          | 5.1     | 5.2 is a release candidate only.                                                                                                                           |
 
 The three ESLint entries unblock together once `create-plugin` adopts `@grafana/eslint-config` v10.
 

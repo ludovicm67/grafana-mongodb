@@ -6,23 +6,77 @@ import { testIds } from '../src/testIds';
 const PROVISIONED_DATASOURCE = 'mongodb.yaml';
 
 type QueryFields = {
+  queryType?: 'Find' | 'Aggregate' | 'Count' | 'Distinct';
   database: string;
   collection: string;
-  queryText: string;
+  queryText?: string;
+  pipeline?: string;
+  projection?: string;
+  sort?: string;
+  limit?: string;
+  skip?: string;
+  distinctField?: string;
   timestampField?: string;
 };
 
 /**
- * Fills the query editor. The datasource only sends a query to the backend once
- * the database, the collection and the query text are all set.
+ * Sets one of the name dropdowns. They suggest what exists but accept anything,
+ * so the value is typed and committed rather than picked from the list.
  */
-async function fillQuery(page: Page, { database, collection, queryText, timestampField }: QueryFields) {
-  await page.getByTestId(testIds.queryEditor.database).fill(database);
-  await page.getByTestId(testIds.queryEditor.collection).fill(collection);
-  if (timestampField !== undefined) {
-    await page.getByTestId(testIds.queryEditor.timestampField).fill(timestampField);
+async function fillCombobox(page: Page, testId: string, value: string) {
+  const input = page.getByTestId(testId);
+  await input.click();
+  await input.fill('');
+  // The value is typed key by key, so that the dropdown narrows down to it.
+  // A single fill() would leave the whole list showing, and pressing Enter
+  // would then pick whichever entry happens to be first. The delay leaves the
+  // combobox time to re-render between keystrokes, otherwise it drops some.
+  await input.pressSequentially(value, { delay: 30 });
+  await expect(input).toHaveValue(value);
+
+  // Wait for the dropdown to offer the value, either as an entry of its own or
+  // as a custom one. Pressing Enter before that commits nothing, and the input
+  // falls back to the value already stored in the query.
+  await expect(page.getByRole('option').filter({ hasText: value }).first()).toBeVisible();
+
+  await page.keyboard.press('Enter');
+  await expect(input).toHaveValue(value);
+}
+
+/**
+ * Fills the query editor. The datasource only sends a query to the backend once
+ * the database and the collection are set.
+ */
+async function fillQuery(page: Page, fields: QueryFields) {
+  // The query type comes first, it decides which inputs are on screen.
+  if (fields.queryType) {
+    await page.getByLabel(fields.queryType, { exact: true }).click();
   }
-  await page.getByTestId(testIds.queryEditor.queryText).fill(queryText);
+
+  await fillCombobox(page, testIds.queryEditor.database, fields.database);
+  await fillCombobox(page, testIds.queryEditor.collection, fields.collection);
+
+  if (fields.distinctField !== undefined) {
+    await fillCombobox(page, testIds.queryEditor.distinctField, fields.distinctField);
+  }
+  if (fields.timestampField !== undefined) {
+    await fillCombobox(page, testIds.queryEditor.timestampField, fields.timestampField);
+  }
+
+  const plain: Array<[string | undefined, string]> = [
+    [fields.projection, testIds.queryEditor.projection],
+    [fields.sort, testIds.queryEditor.sort],
+    [fields.limit, testIds.queryEditor.limit],
+    [fields.skip, testIds.queryEditor.skip],
+    [fields.pipeline, testIds.queryEditor.pipeline],
+    [fields.queryText, testIds.queryEditor.queryText],
+  ];
+
+  for (const [value, testId] of plain) {
+    if (value !== undefined) {
+      await page.getByTestId(testId).fill(value);
+    }
+  }
 }
 
 /**
@@ -85,7 +139,7 @@ test.describe('querying MongoDB through Grafana', () => {
     await expect(panelEditPage.panel.data).toContainText(['ancient log']);
 
     // Setting the timestamp field filters that document out.
-    await page.getByTestId(testIds.queryEditor.timestampField).fill('timestamp');
+    await fillCombobox(page, testIds.queryEditor.timestampField, 'timestamp');
     await expect(panelEditPage.refreshPanel()).toBeOK();
     await expect(panelEditPage.panel.getErrorIcon()).not.toBeVisible();
     await expect(panelEditPage.panel.data).toHaveCount(0);
@@ -99,8 +153,17 @@ test.describe('querying MongoDB through Grafana', () => {
     const datasource = await readProvisionedDataSource({ fileName: PROVISIONED_DATASOURCE });
     await setupPanel(panelEditPage, page, datasource.name);
 
-    // The fixtures spread one document per minute over the last two hours, so
-    // the default "last 6 hours" range always holds some of them.
+    // The `logs` fixtures are dated relative to the moment the MongoDB
+    // container started, so a long running development stack pushes them out of
+    // the default "last 6 hours". The range is widened here to keep the test
+    // about the timestamp field rather than about the age of the container.
+    // The narrow case is covered by the "ancient log" test above, whose
+    // document has a fixed date.
+    //
+    // It is set before the query is filled in, so that no query is in flight
+    // when the panel is refreshed below.
+    await panelEditPage.timeRange.set({ from: 'now-5y', to: 'now' });
+
     await fillQuery(page, {
       database: 'grafana',
       collection: 'logs',
@@ -140,15 +203,233 @@ test.describe('querying MongoDB through Grafana', () => {
     await expect(databaseError).toBeVisible();
     await expect(collectionError).toBeVisible();
 
-    await page.getByTestId(testIds.queryEditor.database).fill('grafana');
+    await fillCombobox(page, testIds.queryEditor.database, 'grafana');
     await expect(databaseError).toBeHidden();
     await expect(collectionError).toBeVisible();
 
-    await page.getByTestId(testIds.queryEditor.collection).fill('fruits');
+    await fillCombobox(page, testIds.queryEditor.collection, 'fruits');
     await expect(collectionError).toBeHidden();
 
     // And the query runs once both are filled in.
     await expect(panelEditPage.refreshPanel()).toBeOK();
     await expect(panelEditPage.panel.data).toContainText(['apple']);
+  });
+});
+
+test.describe('find options', () => {
+  test('limits the returned fields with a projection', async ({ panelEditPage, page, readProvisionedDataSource }) => {
+    const datasource = await readProvisionedDataSource({ fileName: PROVISIONED_DATASOURCE });
+    await setupPanel(panelEditPage, page, datasource.name);
+
+    await fillQuery(page, {
+      database: 'grafana',
+      collection: 'fruits',
+      queryText: '{}',
+      projection: '{ "name": 1, "_id": 0 }',
+    });
+
+    await expect(panelEditPage.refreshPanel()).toBeOK();
+    await expect(panelEditPage.panel.fieldNames).toHaveText(['name']);
+  });
+
+  test('orders the documents with a sort', async ({ panelEditPage, page, readProvisionedDataSource }) => {
+    const datasource = await readProvisionedDataSource({ fileName: PROVISIONED_DATASOURCE });
+    await setupPanel(panelEditPage, page, datasource.name);
+
+    await fillQuery(page, {
+      database: 'grafana',
+      collection: 'fruits',
+      queryText: '{}',
+      projection: '{ "name": 1, "_id": 0 }',
+      sort: '{ "quantity": -1 }',
+    });
+
+    await expect(panelEditPage.refreshPanel()).toBeOK();
+    // banana has 12, apple 5, kiwi 3.
+    await expect(panelEditPage.panel.data).toHaveText(['banana', 'apple', 'kiwi']);
+  });
+
+  test('bounds the results with a limit and a skip', async ({ panelEditPage, page, readProvisionedDataSource }) => {
+    const datasource = await readProvisionedDataSource({ fileName: PROVISIONED_DATASOURCE });
+    await setupPanel(panelEditPage, page, datasource.name);
+
+    await fillQuery(page, {
+      database: 'grafana',
+      collection: 'fruits',
+      queryText: '{}',
+      projection: '{ "name": 1, "_id": 0 }',
+      sort: '{ "quantity": -1 }',
+      skip: '1',
+      limit: '1',
+    });
+
+    await expect(panelEditPage.refreshPanel()).toBeOK();
+    await expect(panelEditPage.panel.data).toHaveText(['apple']);
+  });
+});
+
+test.describe('other query types', () => {
+  test('aggregates with a pipeline', async ({ panelEditPage, page, readProvisionedDataSource }) => {
+    const datasource = await readProvisionedDataSource({ fileName: PROVISIONED_DATASOURCE });
+    await setupPanel(panelEditPage, page, datasource.name);
+
+    await fillQuery(page, {
+      queryType: 'Aggregate',
+      database: 'grafana',
+      collection: 'fruits',
+      pipeline: '[{ "$group": { "_id": null, "total": { "$sum": "$quantity" } } }]',
+    });
+
+    await expect(panelEditPage.refreshPanel()).toBeOK();
+    await expect(panelEditPage.panel.getErrorIcon()).not.toBeVisible();
+    // 5 + 12 + 3
+    await expect(panelEditPage.panel.data).toContainText(['20']);
+  });
+
+  test('reports a pipeline that is not an array', async ({ panelEditPage, page, readProvisionedDataSource }) => {
+    const datasource = await readProvisionedDataSource({ fileName: PROVISIONED_DATASOURCE });
+    await setupPanel(panelEditPage, page, datasource.name);
+
+    await fillQuery(page, {
+      queryType: 'Aggregate',
+      database: 'grafana',
+      collection: 'fruits',
+      pipeline: '{ "$match": {} }',
+    });
+
+    await expect(panelEditPage.refreshPanel()).not.toBeOK();
+  });
+
+  test('counts the matching documents', async ({ panelEditPage, page, readProvisionedDataSource }) => {
+    const datasource = await readProvisionedDataSource({ fileName: PROVISIONED_DATASOURCE });
+    await setupPanel(panelEditPage, page, datasource.name);
+
+    await fillQuery(page, {
+      queryType: 'Count',
+      database: 'grafana',
+      collection: 'fruits',
+      queryText: '{ "quantity": { "$gt": 4 } }',
+    });
+
+    await expect(panelEditPage.refreshPanel()).toBeOK();
+    await expect(panelEditPage.panel.fieldNames).toHaveText(['count']);
+    await expect(panelEditPage.panel.data).toHaveText(['2']);
+  });
+
+  test('lists the unique values of a field', async ({ panelEditPage, page, readProvisionedDataSource }) => {
+    const datasource = await readProvisionedDataSource({ fileName: PROVISIONED_DATASOURCE });
+    await setupPanel(panelEditPage, page, datasource.name);
+
+    await fillQuery(page, {
+      queryType: 'Distinct',
+      database: 'grafana',
+      collection: 'logs',
+      distinctField: 'level',
+      queryText: '{}',
+    });
+
+    await expect(panelEditPage.refreshPanel()).toBeOK();
+    await expect(panelEditPage.panel.fieldNames).toHaveText(['level']);
+    await expect(panelEditPage.panel.data).toHaveText(['ancient', 'error', 'info', 'warn']);
+  });
+
+  // Distinct is the one type that needs an extra field, so the editor has to
+  // ask for it rather than letting the panel look empty.
+  test('flags a distinct query without a field', async ({ panelEditPage, page, readProvisionedDataSource }) => {
+    const datasource = await readProvisionedDataSource({ fileName: PROVISIONED_DATASOURCE });
+    await setupPanel(panelEditPage, page, datasource.name);
+
+    await fillQuery(page, { queryType: 'Distinct', database: 'grafana', collection: 'logs' });
+
+    const fieldError = page.getByText('A field is required for a distinct query');
+    await expect(fieldError).toBeVisible();
+
+    await fillCombobox(page, testIds.queryEditor.distinctField, 'level');
+    await expect(fieldError).toBeHidden();
+    await expect(panelEditPage.refreshPanel()).toBeOK();
+  });
+
+  test('switching type swaps the filter for a pipeline', async ({ panelEditPage, page, readProvisionedDataSource }) => {
+    const datasource = await readProvisionedDataSource({ fileName: PROVISIONED_DATASOURCE });
+    await setupPanel(panelEditPage, page, datasource.name);
+
+    await expect(page.getByTestId(testIds.queryEditor.queryText)).toBeVisible();
+    await expect(page.getByTestId(testIds.queryEditor.projection)).toBeVisible();
+
+    await page.getByLabel('Aggregate', { exact: true }).click();
+
+    await expect(page.getByTestId(testIds.queryEditor.pipeline)).toBeVisible();
+    await expect(page.getByTestId(testIds.queryEditor.queryText)).toBeHidden();
+    // The projection, sort, limit and skip only apply to a find.
+    await expect(page.getByTestId(testIds.queryEditor.projection)).toBeHidden();
+  });
+});
+
+test.describe('name suggestions', () => {
+  test('suggests the databases of the instance', async ({ panelEditPage, page, readProvisionedDataSource }) => {
+    const datasource = await readProvisionedDataSource({ fileName: PROVISIONED_DATASOURCE });
+    await setupPanel(panelEditPage, page, datasource.name);
+
+    await page.getByTestId(testIds.queryEditor.database).click();
+
+    // The seeded instance holds the `grafana` database, next to the internal ones.
+    await expect(page.getByRole('option', { name: 'grafana', exact: true })).toBeVisible();
+  });
+
+  test('suggests the collections of the selected database', async ({
+    panelEditPage,
+    page,
+    readProvisionedDataSource,
+  }) => {
+    const datasource = await readProvisionedDataSource({ fileName: PROVISIONED_DATASOURCE });
+    await setupPanel(panelEditPage, page, datasource.name);
+
+    await fillCombobox(page, testIds.queryEditor.database, 'grafana');
+    await page.getByTestId(testIds.queryEditor.collection).click();
+
+    await expect(page.getByRole('option', { name: 'fruits', exact: true })).toBeVisible();
+    await expect(page.getByRole('option', { name: 'logs', exact: true })).toBeVisible();
+  });
+
+  test('suggests the fields of the selected collection', async ({ panelEditPage, page, readProvisionedDataSource }) => {
+    const datasource = await readProvisionedDataSource({ fileName: PROVISIONED_DATASOURCE });
+    await setupPanel(panelEditPage, page, datasource.name);
+
+    await fillCombobox(page, testIds.queryEditor.database, 'grafana');
+    await fillCombobox(page, testIds.queryEditor.collection, 'logs');
+    await page.getByTestId(testIds.queryEditor.timestampField).click();
+
+    // The fields are read from a sample of the documents.
+    await expect(page.getByRole('option', { name: 'timestamp', exact: true })).toBeVisible();
+    await expect(page.getByRole('option', { name: 'level', exact: true })).toBeVisible();
+  });
+
+  test('picking the suggestions runs the query', async ({ panelEditPage, page, readProvisionedDataSource }) => {
+    const datasource = await readProvisionedDataSource({ fileName: PROVISIONED_DATASOURCE });
+    await setupPanel(panelEditPage, page, datasource.name);
+
+    await page.getByTestId(testIds.queryEditor.database).click();
+    await page.getByRole('option', { name: 'grafana', exact: true }).click();
+
+    await page.getByTestId(testIds.queryEditor.collection).click();
+    await page.getByRole('option', { name: 'fruits', exact: true }).click();
+
+    await expect(panelEditPage.refreshPanel()).toBeOK();
+    await expect(panelEditPage.panel.data).toContainText(['apple']);
+  });
+
+  // MongoDB creates a collection on write, so a name that does not exist yet
+  // has to stay usable.
+  test('accepts a collection that does not exist yet', async ({ panelEditPage, page, readProvisionedDataSource }) => {
+    const datasource = await readProvisionedDataSource({ fileName: PROVISIONED_DATASOURCE });
+    await setupPanel(panelEditPage, page, datasource.name);
+
+    await fillCombobox(page, testIds.queryEditor.database, 'grafana');
+    await fillCombobox(page, testIds.queryEditor.collection, 'not_created_yet');
+    await page.getByTestId(testIds.queryEditor.queryText).fill('{}');
+
+    // Querying an unknown collection is not an error, it simply returns nothing.
+    await expect(panelEditPage.refreshPanel()).toBeOK();
+    await expect(panelEditPage.panel.getErrorIcon()).not.toBeVisible();
   });
 });

@@ -11,9 +11,7 @@
     "author": {
       "name": "ludovicm67"
     },
-    "keywords": [
-      "datasource"
-    ],
+    "keywords": ["datasource"],
     "logos": {
       "small": "img/logo.svg",
       "large": "img/logo.svg"

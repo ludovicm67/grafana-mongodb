@@ -4,10 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
-	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
-	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func TestNewDatasource(t *testing.T) {
@@ -137,97 +135,6 @@ func TestRemoveComments(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := removeComments(tt.query); got != tt.want {
 				t.Errorf("removeComments(%q) = %q, want %q", tt.query, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestStringify(t *testing.T) {
-	objectID, err := bson.ObjectIDFromHex("507f1f77bcf86cd799439011")
-	if err != nil {
-		t.Fatalf("failed to build an ObjectID: %v", err)
-	}
-	timestamp := time.Date(2024, time.January, 1, 12, 0, 0, 0, time.UTC)
-
-	tests := []struct {
-		name  string
-		value any
-		want  string
-	}{
-		{"nil", nil, ""},
-		{"string", "hello", "hello"},
-		{"int32", int32(42), "42"},
-		{"float", 4.2, "4.2"},
-		{"bool", true, "true"},
-		{"object id", objectID, "507f1f77bcf86cd799439011"},
-		{"bson datetime", bson.NewDateTimeFromTime(timestamp), "2024-01-01T12:00:00Z"},
-		{"time", timestamp, "2024-01-01T12:00:00Z"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := stringify(tt.value); got != tt.want {
-				t.Errorf("stringify(%v) = %q, want %q", tt.value, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestToEpochMillis(t *testing.T) {
-	timestamp := time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)
-	millis := float64(timestamp.UnixMilli())
-
-	tests := []struct {
-		name  string
-		value any
-		want  float64
-		ok    bool
-	}{
-		{"bson datetime", bson.NewDateTimeFromTime(timestamp), millis, true},
-		{"time", timestamp, millis, true},
-		{"int64", int64(1704067200000), millis, true},
-		{"int32", int32(1000), 1000, true},
-		{"float64", millis, millis, true},
-		{"numeric string", "1704067200000", millis, true},
-		{"non numeric string", "not a timestamp", 0, false},
-		{"nil", nil, 0, false},
-		{"bool", true, 0, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, ok := toEpochMillis(tt.value)
-			if ok != tt.ok {
-				t.Fatalf("toEpochMillis(%v) ok = %v, want %v", tt.value, ok, tt.ok)
-			}
-			if ok && got != tt.want {
-				t.Errorf("toEpochMillis(%v) = %v, want %v", tt.value, got, tt.want)
-			}
-		})
-	}
-}
-
-// TestQueryTextIsExtendedJSON documents that queries are parsed as MongoDB
-// extended JSON, which is a superset of JSON: plain queries and operators keep
-// working, and `$oid` / `$date` wrappers become real BSON values.
-func TestQueryTextIsExtendedJSON(t *testing.T) {
-	tests := []struct {
-		name  string
-		query string
-	}{
-		{"empty", `{}`},
-		{"equality", `{"name": "test"}`},
-		{"comparison operator", `{"value": {"$gt": 5}}`},
-		{"logical operator", `{"$and": [{"a": 1}, {"b": 2}]}`},
-		{"object id", `{"_id": {"$oid": "507f1f77bcf86cd799439011"}}`},
-		{"date", `{"ts": {"$gte": {"$date": "2024-01-01T00:00:00Z"}}}`},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var parsed bson.M
-			if err := bson.UnmarshalExtJSON([]byte(tt.query), false, &parsed); err != nil {
-				t.Errorf("failed to parse %s: %v", tt.query, err)
 			}
 		})
 	}

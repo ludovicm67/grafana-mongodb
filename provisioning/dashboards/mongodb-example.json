@@ -54,9 +54,9 @@
     {
       "id": 3,
       "type": "table",
-      "title": "Errors only",
-      "description": "Shows that MongoDB query operators are supported.",
-      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 9 },
+      "title": "Errors only, newest first",
+      "description": "Shows query operators, a projection, a sort and a limit.",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 9 },
       "datasource": {
         "type": "ludovicm67-mongodb-datasource",
         "uid": "mongodb-datasource-dev"
@@ -64,10 +64,76 @@
       "targets": [
         {
           "refId": "A",
+          "queryType": "find",
           "database": "grafana",
           "collection": "logs",
           "queryText": "// only the error level\n{ \"level\": \"error\" }",
+          "projection": "{ \"_id\": 0 }",
+          "sort": "{ \"timestamp\": -1 }",
+          "limit": 10,
           "timestampField": "timestamp"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Errors in range",
+      "description": "A count query. The dashboard time range is pushed into the query.",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
+      "datasource": {
+        "type": "ludovicm67-mongodb-datasource",
+        "uid": "mongodb-datasource-dev"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "count",
+          "database": "grafana",
+          "collection": "logs",
+          "queryText": "{ \"level\": \"error\" }",
+          "timestampField": "timestamp"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "barchart",
+      "title": "Documents per level",
+      "description": "An aggregation pipeline grouping the logs by level.",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 18 },
+      "datasource": {
+        "type": "ludovicm67-mongodb-datasource",
+        "uid": "mongodb-datasource-dev"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "aggregate",
+          "database": "grafana",
+          "collection": "logs",
+          "pipeline": "[\n  { \"$group\": { \"_id\": \"$level\", \"total\": { \"$sum\": 1 } } },\n  { \"$sort\": { \"_id\": 1 } }\n]"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Known levels",
+      "description": "A distinct query, listing the unique values of a field.",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 18 },
+      "datasource": {
+        "type": "ludovicm67-mongodb-datasource",
+        "uid": "mongodb-datasource-dev"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "distinct",
+          "database": "grafana",
+          "collection": "logs",
+          "distinctField": "level",
+          "queryText": "{}"
         }
       ]
     }

@@ -25,10 +25,25 @@ describe('DataSource', () => {
       expect(datasource.filterQuery({ ...complete, [field]: undefined })).toBe(false);
     });
 
-    // The backend reads an empty query text as `{}`, so it must not block the request.
+    // The backend reads an empty filter as `{}` and an empty pipeline as `[]`,
+    // so neither must block the request.
     it('runs a query without a query text', () => {
       expect(datasource.filterQuery({ ...complete, queryText: '' })).toBe(true);
       expect(datasource.filterQuery({ ...complete, queryText: undefined })).toBe(true);
+    });
+
+    it('runs an aggregation without a pipeline', () => {
+      expect(datasource.filterQuery({ ...complete, queryType: 'aggregate', pipeline: '' })).toBe(true);
+    });
+
+    // Distinct is the one type that cannot run without an extra field.
+    it('skips a distinct query without a field', () => {
+      expect(datasource.filterQuery({ ...complete, queryType: 'distinct' })).toBe(false);
+      expect(datasource.filterQuery({ ...complete, queryType: 'distinct', distinctField: '' })).toBe(false);
+    });
+
+    it('runs a distinct query with a field', () => {
+      expect(datasource.filterQuery({ ...complete, queryType: 'distinct', distinctField: 'level' })).toBe(true);
     });
   });
 });
