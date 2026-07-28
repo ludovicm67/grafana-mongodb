@@ -1,5 +1,35 @@
 # @ludovicm67/mongodb-datasource
 
+## 1.2.0
+
+### Minor Changes
+
+- f1a32d1: Support more ways of querying MongoDB than a plain `find`.
+
+  - Add a **Query Type** selector to the query editor, with **Find**, **Aggregate**, **Count** and
+    **Distinct**. Existing queries have no type stored and keep running as a find.
+  - **Find** gains a projection, a sort, a limit and a skip. The sort keeps the order of its keys.
+  - **Aggregate** runs an aggregation pipeline, written as an array of stages.
+  - **Count** returns the number of matching documents as a single value, ready for a stat panel.
+  - **Distinct** returns the unique values of a field, optionally restricted by a filter.
+  - The query editor only shows the inputs that apply to the selected type, and keeps the filter and
+    the pipeline apart so switching type does not discard what was typed.
+  - **Timestamp Field** now works for every type. Find and aggregate filter the documents they read
+    back, while count and distinct push the range into the query, matching both the numeric and the
+    date representation of a timestamp.
+  - Report an unknown query type, a pipeline that is not an array, a distinct query without a field,
+    and a negative limit or skip as clear errors.
+
+- f1a32d1: Suggest the database, collection and field names in the query editor.
+
+  - The backend now answers resource calls listing the databases of the instance, the collections of
+    a database, and the field names found in a sample of the documents of a collection.
+  - **Database**, **Collection**, **Timestamp Field** and the distinct **Field** became dropdowns that
+    load those names, chained so that each one narrows the next.
+  - The dropdowns still accept any value, since a collection may not exist yet, a user may not be
+    allowed to list them, and a dashboard variable is a valid entry. When listing fails, the reason is
+    shown in the dropdown rather than blocking the input.
+
 ## 1.1.1
 
 ### Patch Changes
