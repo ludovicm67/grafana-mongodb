@@ -2,7 +2,7 @@ services:
   grafana:
     build:
       args:
-        grafana_version: ${GRAFANA_VERSION:-13.1.1}
+        grafana_version: ${GRAFANA_VERSION:-13.2.0}
     # `!override` replaces the port list coming from the base file instead of
     # appending to it, so the host ports stay configurable and several plugin
     # stacks can run side by side.

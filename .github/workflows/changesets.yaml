@@ -35,10 +35,9 @@ jobs:
 
       - name: Create Release Pull Request or create a release
         id: changesets
-        uses: changesets/action@v1
+        uses: changesets/action@v2
         with:
-          publish: npm run release
-          commit: 'chore: release'
-          title: 'Merge to release'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+          publish-script: npm run release
+          commit-message: 'chore: release'
+          pr-title: 'Merge to release'
+          github-token: ${{ secrets.GH_TOKEN }}
