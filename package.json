@@ -29,7 +29,7 @@
     "@axe-core/playwright": "^4.13.0",
     "@changesets/cli": "^3.0.1",
     "@grafana/eslint-config": "^9.0.0",
-    "@grafana/plugin-e2e": "^3.11.0",
+    "@grafana/plugin-e2e": "^3.11.1",
     "@grafana/sign-plugin": "^3.2.2",
     "@grafana/tsconfig": "^2.2.0",
     "@playwright/test": "^1.62.1",
