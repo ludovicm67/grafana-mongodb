@@ -81,7 +81,7 @@
     "node": ">=22"
   },
   "overrides": {
-    "brace-expansion": "^5.0.9",
+    "brace-expansion": "^5.0.12",
     "minimatch": "^10.2.6"
   },
   "dependencies": {
