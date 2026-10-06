@@ -178,15 +178,14 @@ Every dependency is on its latest release except the ones below, each blocked by
 upstream. Dependabot is configured to skip the updates that cannot be merged, so a red
 Dependabot PR means something has genuinely changed.
 
-| Dependency                      | Held at | Blocked by                                                                                                                                                 |
-| ------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `typescript`                    | 6       | `@typescript-eslint` 8, the latest release, caps TypeScript at `<6.1.0`.                                                                                   |
-| `eslint`                        | 9       | `eslint-plugin-react` 7.37.5, the latest release, supports at most `eslint@^9.7`. ESLint 10 removed `context.getFilename()`, which the plugin still calls. |
-| `@grafana/eslint-config`        | 9       | v10 dropped the `./flat.js` entry point that the generated `.config/eslint.config.mjs` imports.                                                            |
-| `@stylistic/eslint-plugin-ts`   | 4       | Required as a peer dependency by `@grafana/eslint-config` 9. Superseded upstream by `@stylistic/eslint-plugin`, which v10 uses instead.                    |
-| `webpack-subresource-integrity` | 5.1     | 5.2 is a release candidate only.                                                                                                                           |
+| Dependency   | Held at | Blocked by                                                                                                                    |
+| ------------ | ------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `typescript` | 6       | `@typescript-eslint` 8, the latest release, caps TypeScript at `<6.1.0`. TypeScript 7 (the native port) is not supported yet. |
 
-The three ESLint entries unblock together once `create-plugin` adopts `@grafana/eslint-config` v10.
+`eslint-plugin-react` 7.37.5, the latest release, still declares `eslint@^9.7` as its peer dependency and calls
+`context.getFilename()`, which ESLint 10 removed. ESLint 10 is used anyway: an `overrides` entry in `package.json`
+lifts the peer range, and `.config/eslint.config.mjs` wraps the plugin's rules with `fixupConfigRules` from
+`@eslint/compat`, which restores the removed context methods. Both can go once the plugin supports ESLint 10.
 
 `react` and `react-dom` follow the version bundled by Grafana, since the plugin uses Grafana's own React
 at runtime: React 19 since Grafana 13.2, which is also what the `@grafana/*` packages now require.
