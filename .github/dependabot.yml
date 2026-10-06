@@ -21,6 +21,14 @@ updates:
       grafana:
         patterns:
           - '@grafana/*'
+      # react-dom pins react to the exact same version, so they must move together.
+      # Listed before dev-dependencies so the @types packages land here.
+      react:
+        patterns:
+          - 'react'
+          - 'react-dom'
+          - '@types/react'
+          - '@types/react-dom'
       dev-dependencies:
         dependency-type: 'development'
         exclude-patterns:
