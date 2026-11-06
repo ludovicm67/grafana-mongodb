@@ -52,7 +52,7 @@ jobs:
     # without any infrastructure.
     services:
       mongodb:
-        image: mongo:8
+        image: mongo:9
         env:
           MONGO_INITDB_ROOT_USERNAME: root
           MONGO_INITDB_ROOT_PASSWORD: example
